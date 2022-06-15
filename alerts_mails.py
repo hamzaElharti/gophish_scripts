@@ -1,0 +1,154 @@
+import os,sys,time, getopt
+from itertools import chain
+import email, imaplib, ssl
+from imapclient import IMAPClient
+import traceback
+from exchangelib import Account, DELEGATE, FaultTolerance, Configuration, Credentials, EWSTimeZone
+import requests, requests.adapters
+from urllib.parse import urlparse
+from exchangelib.protocol import BaseProtocol, NoVerifyHTTPAdapter
+from datetime import datetime, timedelta
+import json, logging,warnings , logging.handlers
+import enum
+
+# =================== Util Functions ===================== #
+# Enum for size units
+class SIZE_UNIT(enum.Enum):
+   BYTES = 1
+   KB = 2
+   MB = 3
+   GB = 4
+def get_file_size(file_name, size_type = SIZE_UNIT.BYTES ):
+   """ Get file in size in given unit like KB, MB or GB"""
+   size = os.path.getsize(file_name)
+   return convert_unit(size, size_type)
+
+def convert_unit(size_in_bytes, unit):
+   """ Convert the size from bytes to other units like KB, MB or GB"""
+   if unit == SIZE_UNIT.KB:
+       return size_in_bytes/1024
+   elif unit == SIZE_UNIT.MB:
+       return size_in_bytes/(1024*1024)
+   elif unit == SIZE_UNIT.GB:
+       return size_in_bytes/(1024*1024*1024)
+   else:
+       return size_in_bytes
+
+# ====================== Configure Logging ===================== #    
+logging_file_name = "mail_alerts.log"
+open(logging_file_name, "a")
+handler = logging.handlers.WatchedFileHandler(
+os.environ.get("LOGFILE", "mail_alerts.log"))
+
+formatter = logging.Formatter(logging.BASIC_FORMAT)
+handler.setFormatter(formatter)
+root = logging.getLogger()
+root.setLevel(os.environ.get("LOGLEVEL", "INFO"))
+root.addHandler(handler)
+
+# ====================== inputs ===================== #      
+host_name = ""
+username = ""
+password = ""
+
+proxies = {
+   'http': '',
+   'https': '',
+}
+mail_box = ""
+report_header_key = ""
+gophish_url = ""
+header = {
+    'Authorization': '',
+    'content-type': "application/json",
+    }
+sleep =  30 # arg to this script is the number of seconds to look back in the inbox
+# ====================== Read args ===================== #
+#print(sys.argv[1])
+try:
+    opts, args = getopt.getopt(sys.argv[1:], 'h', ['host-name=', 'mail-box', 'username=',
+    'password=', 'report-header-key', 'gophish-url=','gophish-authorization-header=', 'proxy', 'sleep='])
+except getopt.GetoptError:
+    print('mail_checker.py --host-name <exchange host_name> --mail-box <mail box address> --username <mail box username> --password <mail box password> --report-header-key <the key of report header> --gophish-url <gophish_url> --gophish-authorization-header <gophish-authorization-header> --proxy <proxy url:port> --sleep [sleep time in seconds, default is 60s]')
+    sys.exit(2)
+for opt, arg in opts:
+    if opt == '-h':
+        print('mail_checker.py --host-name <exchange host_name> --mail-box <mail box address> --username <mail box username> --password <mail box password> --report-header-key <the key of report header> --gophish-url <gophish_url> --gophish-authorization-header <gophish-authorization-header> --proxy <proxy url:port> --sleep [sleep time in seconds, default is 60s]')
+        sys.exit()
+    elif opt in ("-H", "--host-name"):
+        host_name = arg
+    elif opt in ("-b", "--mail-box"):
+        mail_box = arg
+    elif opt in ("-u", "--username"):
+        username = arg
+    elif opt in ("-p", "--password"):
+        password = arg
+    elif opt in ("-r", "--report-header-key"):
+        report_header_key = arg
+    elif opt in ("-g", "--gophish-url"):
+        gophish_url = arg
+    elif opt in ("-a", "--gophish-authorization-header"):
+        header['Authorization'] = arg
+    elif opt in ("-x", "--proxy"):
+        proxies['http'] = arg
+        proxies['https'] = arg
+    elif opt in ("-s", "--sleep"):
+        sleep = arg
+logging.info("************* inputs **************")
+logging.info(f"\n -Exchange host: {host_name} \n -Mail box: {mail_box} \n -Mail box: {username} \n -Password: ********* \n -report-header-key {report_header_key} \n -Gophish URL: {gophish_url} \n -Gophish Authorization header: *********************** ")
+# ====================== Process alerts ===================== #
+
+# Get the local timezone
+tz = EWSTimeZone.localzone()
+#BaseProtocol.HTTP_ADAPTER_CLS = RootCAAdapter
+BaseProtocol.HTTP_ADAPTER_CLS = NoVerifyHTTPAdapter
+# Disable insecure TLS warnings
+warnings.filterwarnings("ignore")
+
+now = datetime.now(tz=tz)
+emails_since = now - timedelta(seconds=sleep)
+
+credentials = credentials = Credentials(username=username, password=password)
+config = Configuration(server=host_name, credentials=credentials)
+try:
+    alerts_box = Account(
+    primary_smtp_address=mail_box,
+    credentials=credentials,
+    config=config,
+    autodiscover=False,
+    access_type=DELEGATE)
+    logging.exception("Exchange: Connection OK")
+except Exception:
+    logging.exception("Exchange: Connection Error, please try again !")
+
+
+processed_mails_count = 0
+for msg in (
+    alerts_box.inbox.filter(datetime_received__gt=emails_since, is_read=False)
+    .order_by("datetime_received")
+):
+    subj = msg.subject
+    # mark mail as read
+    msg.is_read = True
+    msg.save()
+    # extract the Rid, and send post request to gophish
+    rid = ''
+    for header in msg.headers:
+        if header.name == report_header_key:
+            rid = header.value
+            break
+    if rid != '':
+        logging.info("[Alert type] Alert from Gophish a comapaign")
+        try:
+            response = requests.get(gophish_url+"?rid=" + rid, headers=header, verify=False, proxies=proxies)
+            if response.status_code == 200:
+                logging.info(":) New mail processed successfully|rId:" + rid)
+            else:
+                logging.error(":( Error while sending the request to gophish|rId:" + rid)
+        except Exception:
+            logging.error(f"{gophish_url} Connection error!")
+    else:
+        logging.info("[Alert type] Real alert from: " + msg.sender.name )
+    processed_mails_count+=1
+
+logging.info(f"Total reported mails since [{emails_since}] : {processed_mails_count}")
