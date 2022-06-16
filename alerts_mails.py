@@ -88,7 +88,7 @@ for opt, arg in opts:
     elif opt in ("-g", "--gophish-url"):
         gophish_url = arg
     elif opt in ("-a", "--gophish-authorization-header"):
-        header['Authorization'] = arg
+        request_header['Authorization'] = arg
     elif opt in ("-x", "--proxy"):
         proxies['http'] = arg
         proxies['https'] = arg
