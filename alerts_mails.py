@@ -1,7 +1,6 @@
 import os,sys,time, getopt
 from itertools import chain
 import email, imaplib, ssl
-from imapclient import IMAPClient
 import traceback
 from exchangelib import Account, DELEGATE, FaultTolerance, Configuration, Credentials, EWSTimeZone
 import requests, requests.adapters
@@ -10,6 +9,7 @@ from exchangelib.protocol import BaseProtocol, NoVerifyHTTPAdapter
 from datetime import datetime, timedelta
 import json, logging,warnings , logging.handlers
 import enum
+from bs4 import BeautifulSoup
 
 # =================== Util Functions ===================== #
 # Enum for size units
@@ -58,7 +58,7 @@ proxies = {
 mail_box = ""
 report_header_key = ""
 gophish_url = ""
-header = {
+request_header = {
     'Authorization': '',
     'content-type': "application/json",
     }
@@ -66,8 +66,8 @@ sleep =  30 # arg to this script is the number of seconds to look back in the in
 # ====================== Read args ===================== #
 #print(sys.argv[1])
 try:
-    opts, args = getopt.getopt(sys.argv[1:], 'h', ['host-name=', 'mail-box', 'username=',
-    'password=', 'report-header-key', 'gophish-url=','gophish-authorization-header=', 'proxy', 'sleep='])
+    opts, args = getopt.getopt(sys.argv[1:], 'h', ['host-name=', 'mail-box=', 'username=',
+    'password=', 'report-header-key=', 'gophish-url=','gophish-authorization-header=', 'proxy=', 'sleep='])
 except getopt.GetoptError:
     print('mail_checker.py --host-name <exchange host_name> --mail-box <mail box address> --username <mail box username> --password <mail box password> --report-header-key <the key of report header> --gophish-url <gophish_url> --gophish-authorization-header <gophish-authorization-header> --proxy <proxy url:port> --sleep [sleep time in seconds, default is 60s]')
     sys.exit(2)
@@ -93,10 +93,12 @@ for opt, arg in opts:
         proxies['http'] = arg
         proxies['https'] = arg
     elif opt in ("-s", "--sleep"):
-        sleep = arg
+        sleep = int(arg)
 logging.info("************* inputs **************")
 logging.info(f"\n -Exchange host: {host_name} \n -Mail box: {mail_box} \n -Mail box: {username} \n -Password: ********* \n -report-header-key {report_header_key} \n -Gophish URL: {gophish_url} \n -Gophish Authorization header: *********************** ")
-# ====================== Process alerts ===================== #
+print(f"\n -Exchange host: {host_name} \n -Mail box: {mail_box} \n -Mail box: {username} \n -Password: ********* \n -report-header-key {report_header_key} \n -Gophish URL: {gophish_url} \n -Gophish Authorization header: *********************** ")
+
+print("# ====================== Process alerts ===================== #")
 
 # Get the local timezone
 tz = EWSTimeZone.localzone()
@@ -117,14 +119,14 @@ try:
     config=config,
     autodiscover=False,
     access_type=DELEGATE)
-    logging.exception("Exchange: Connection OK")
+    logging.info("Exchange: Connection OK")
 except Exception:
     logging.exception("Exchange: Connection Error, please try again !")
 
 
 processed_mails_count = 0
 for msg in (
-    alerts_box.inbox.filter(datetime_received__gt=emails_since, is_read=False)
+    alerts_box.inbox.filter(datetime_received__gt=emails_since, is_read=True)
     .order_by("datetime_received")
 ):
     subj = msg.subject
@@ -133,14 +135,19 @@ for msg in (
     msg.save()
     # extract the Rid, and send post request to gophish
     rid = ''
-    for header in msg.headers:
-        if header.name == report_header_key:
-            rid = header.value
+    rid = ''
+    original_header = BeautifulSoup(msg.body, 'html.parser')
+    header_rows = original_header.find_all('tr')
+    for header in header_rows:
+        tds = header.text.split("\n\n\n")
+        header_key = tds[0].split("\n\n")[1]
+        if header_key == report_header_key:
+            rid = tds[1].split("\n\n")[0]
             break
     if rid != '':
         logging.info("[Alert type] Alert from Gophish a comapaign")
         try:
-            response = requests.get(gophish_url+"?rid=" + rid, headers=header, verify=False, proxies=proxies)
+            response = requests.get(gophish_url+"/report?rid=" + rid, headers=request_header, verify=False, proxies=proxies)
             if response.status_code == 200:
                 logging.info(":) New mail processed successfully|rId:" + rid)
             else:
@@ -152,3 +159,4 @@ for msg in (
     processed_mails_count+=1
 
 logging.info(f"Total reported mails since [{emails_since}] : {processed_mails_count}")
+print(f"Total reported mails since [{emails_since}] : {processed_mails_count}")
