@@ -35,10 +35,10 @@ def convert_unit(size_in_bytes, unit):
        return size_in_bytes
 
 # ====================== Configure Logging ===================== #    
-logging_file_name = "mail_alerts.log"
+logging_file_name = "/var/mail_alerts.log"
 open(logging_file_name, "a")
 handler = logging.handlers.WatchedFileHandler(
-os.environ.get("LOGFILE", "mail_alerts.log"))
+os.environ.get("LOGFILE", "/var/mail_alerts.log"))
 
 formatter = logging.Formatter(logging.BASIC_FORMAT)
 handler.setFormatter(formatter)
