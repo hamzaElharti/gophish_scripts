@@ -45,7 +45,8 @@ handler.setFormatter(formatter)
 root = logging.getLogger()
 root.setLevel(os.environ.get("LOGLEVEL", "INFO"))
 root.addHandler(handler)
-
+logging.info("************************ Reported Mails *****************************")
+logging.info("************************ Start Processing ***************************")
 # ====================== inputs ===================== #      
 host_name = ""
 username = ""
@@ -129,7 +130,6 @@ for msg in (
     alerts_box.inbox.filter(datetime_received__gt=emails_since, is_read=True)
     .order_by("datetime_received")
 ):
-    subj = msg.subject
     # mark mail as read
     msg.is_read = True
     msg.save()
