@@ -1,0 +1,9 @@
+[Unit]
+Description=Extract mails from alert box and send them to gophish
+After=network.target
+[Service]
+Type=simple
+Restart=always
+ExecStart=/bin/bash /path_to_the_script/alerts_mails.sh
+[Install]
+WantedBy=multi-user.target
